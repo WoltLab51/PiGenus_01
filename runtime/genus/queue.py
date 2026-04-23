@@ -110,6 +110,13 @@ class TaskQueue:
                 break
         self.save()
 
+    def peek(self) -> Optional[dict]:
+        """Return the next pending task without changing its status."""
+        for task in self._queue:
+            if task["status"] == "pending":
+                return task
+        return None
+
     def pending_count(self) -> int:
         """Return the number of tasks still waiting to be processed."""
         return sum(1 for t in self._queue if t["status"] == "pending")

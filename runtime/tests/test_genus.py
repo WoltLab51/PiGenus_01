@@ -56,6 +56,9 @@ from genus.ledger import Ledger
 from genus.worker import BasicWorker
 from genus.evaluator import Evaluator
 from genus.orchestrator import Orchestrator
+from genus.problem_matrix import ProblemMatrix
+from genus.agent_matrix import AgentMatrix
+from genus.matcher import match
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +320,84 @@ class TestOrchestrator(unittest.TestCase):
         q.dequeue()  # first task is now "processing"
         self.assertEqual(q.unfinished_count(), 2)
         self.assertEqual(q.pending_count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# ProblemMatrix tests
+# ---------------------------------------------------------------------------
+
+class TestProblemMatrix(unittest.TestCase):
+    def test_known_types(self):
+        pm = ProblemMatrix()
+        self.assertEqual(pm.categorize("echo"), "communication")
+        self.assertEqual(pm.categorize("noop"), "maintenance")
+
+    def test_unknown_type_returns_unknown(self):
+        pm = ProblemMatrix()
+        self.assertEqual(pm.categorize("totally_unknown"), "unknown")
+
+    def test_empty_string_returns_unknown(self):
+        pm = ProblemMatrix()
+        self.assertEqual(pm.categorize(""), "unknown")
+
+    def test_custom_mapping(self):
+        pm = ProblemMatrix({"custom": "custom_category"})
+        self.assertEqual(pm.categorize("custom"), "custom_category")
+        self.assertEqual(pm.categorize("echo"), "unknown")
+
+
+# ---------------------------------------------------------------------------
+# AgentMatrix tests
+# ---------------------------------------------------------------------------
+
+class TestAgentMatrix(unittest.TestCase):
+    def test_known_categories(self):
+        am = AgentMatrix()
+        self.assertEqual(am.resolve("communication"), "basic_worker")
+        self.assertEqual(am.resolve("maintenance"), "basic_worker")
+        self.assertEqual(am.resolve("unknown"), "basic_worker")
+
+    def test_unrecognised_category_falls_back(self):
+        am = AgentMatrix()
+        self.assertEqual(am.resolve("totally_new_category"), "basic_worker")
+
+    def test_custom_mapping(self):
+        am = AgentMatrix({"special": "special_agent"})
+        self.assertEqual(am.resolve("special"), "special_agent")
+        self.assertEqual(am.resolve("other"), "basic_worker")
+
+
+# ---------------------------------------------------------------------------
+# Matcher tests
+# ---------------------------------------------------------------------------
+
+class TestMatcher(unittest.TestCase):
+    def test_echo_task(self):
+        category, agent = match({"type": "echo", "payload": {}})
+        self.assertEqual(category, "communication")
+        self.assertEqual(agent, "basic_worker")
+
+    def test_noop_task(self):
+        category, agent = match({"type": "noop"})
+        self.assertEqual(category, "maintenance")
+        self.assertEqual(agent, "basic_worker")
+
+    def test_unknown_type_falls_back(self):
+        category, agent = match({"type": "mystery_type"})
+        self.assertEqual(category, "unknown")
+        self.assertEqual(agent, "basic_worker")
+
+    def test_missing_type_key_falls_back(self):
+        category, agent = match({})
+        self.assertEqual(category, "unknown")
+        self.assertEqual(agent, "basic_worker")
+
+    def test_returns_tuple_of_two_strings(self):
+        result = match({"type": "echo"})
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+        self.assertIsInstance(result[0], str)
+        self.assertIsInstance(result[1], str)
 
 
 if __name__ == "__main__":
