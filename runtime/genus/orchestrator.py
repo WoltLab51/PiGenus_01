@@ -16,6 +16,7 @@ from .queue import TaskQueue
 from .ledger import task_ledger, agent_ledger
 from .worker import BasicWorker
 from .evaluator import Evaluator
+from .matcher import match
 from .logger import get_logger
 
 logger = get_logger()
@@ -76,6 +77,15 @@ class Orchestrator:
             tick += 1
             pending = self.queue.pending_count()
             logger.info("Tick %d | queue pending=%d", tick, pending)
+
+            next_task = self.queue.peek()
+            if next_task:
+                category, agent_name = match(next_task)
+                logger.info(
+                    "Match | task_id=%s type=%s -> category=%s agent=%s",
+                    next_task.get("id", "?"), next_task.get("type", "?"),
+                    category, agent_name,
+                )
 
             processed = self.worker.run_once()
 
