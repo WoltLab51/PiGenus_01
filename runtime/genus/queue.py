@@ -9,6 +9,8 @@ import os
 import uuid
 from typing import Optional
 
+from .logger import get_logger
+
 # Resolve data/ relative to this file's parent directory (runtime/)
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 QUEUE_FILE = os.path.join(DATA_DIR, "queue.json")
@@ -138,11 +140,10 @@ class TaskQueue:
 
         Returns the number of tasks successfully enqueued.  Returns 0 (and
         logs a warning) if the file is missing, unreadable, or contains
-        invalid JSON.  Individual task dicts that lack a ``"type"`` key are
-        silently skipped.
+        invalid JSON.  Individual invalid items, including task dicts that
+        lack a ``"type"`` key, are skipped and logged as warnings.
         """
-        import logging as _logging
-        _log = _logging.getLogger(__name__)
+        _log = get_logger()
 
         if not os.path.exists(path):
             _log.warning("load_from_json_file: file not found: %s", path)
@@ -159,7 +160,7 @@ class TaskQueue:
             _log.warning("load_from_json_file: expected a JSON array in %s", path)
             return 0
 
-        count = 0
+        new_tasks = []
         for item in data:
             if not isinstance(item, dict):
                 _log.warning("load_from_json_file: skipping non-dict item: %r", item)
@@ -169,10 +170,18 @@ class TaskQueue:
                 _log.warning("load_from_json_file: skipping task without 'type': %r", item)
                 continue
             payload = item.get("payload")
-            self.enqueue(str(task_type), payload if isinstance(payload, dict) else None)
-            count += 1
+            new_tasks.append({
+                "id": str(uuid.uuid4()),
+                "type": str(task_type),
+                "payload": payload if isinstance(payload, dict) else {},
+                "status": "pending",
+            })
 
-        return count
+        if new_tasks:
+            self._queue.extend(new_tasks)
+            self.save()
+
+        return len(new_tasks)
 
     def __len__(self) -> int:
         return len(self._queue)

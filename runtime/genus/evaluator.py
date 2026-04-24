@@ -9,6 +9,10 @@ from .logger import get_logger
 
 logger = get_logger()
 
+# Baseline for efficiency normalisation: tasks completing in this many
+# milliseconds score 0.0; tasks completing in 0 ms score 1.0.
+_EFFICIENCY_BASELINE_MS = 10_000.0
+
 
 class Evaluator:
     """Reviews completed tasks and persists summary statistics."""
@@ -36,8 +40,8 @@ class Evaluator:
             ]
             if durations:
                 avg_ms = sum(durations) / len(durations)
-                # Normalise: 0 ms → 1.0, 10000 ms → ~0.0; cap between 0 and 1
-                efficiency_score = max(0.0, min(1.0, 1.0 - avg_ms / 10000.0))
+                # Normalise: 0 ms → 1.0, _EFFICIENCY_BASELINE_MS → 0.0; cap between 0 and 1
+                efficiency_score = max(0.0, min(1.0, 1.0 - avg_ms / _EFFICIENCY_BASELINE_MS))
             else:
                 efficiency_score = 0.5
         except Exception:
