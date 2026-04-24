@@ -130,5 +130,49 @@ class TaskQueue:
         """
         return sum(1 for t in self._queue if t["status"] in ("pending", "processing"))
 
+    def load_from_json_file(self, path: str) -> int:
+        """Load tasks from an external JSON file and enqueue them.
+
+        The file must contain a JSON array of task dicts.  Each dict must
+        have at least a ``"type"`` key; ``"payload"`` is optional.
+
+        Returns the number of tasks successfully enqueued.  Returns 0 (and
+        logs a warning) if the file is missing, unreadable, or contains
+        invalid JSON.  Individual task dicts that lack a ``"type"`` key are
+        silently skipped.
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        if not os.path.exists(path):
+            _log.warning("load_from_json_file: file not found: %s", path)
+            return 0
+
+        try:
+            with open(path, "r") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError) as exc:
+            _log.warning("load_from_json_file: cannot read %s: %s", path, exc)
+            return 0
+
+        if not isinstance(data, list):
+            _log.warning("load_from_json_file: expected a JSON array in %s", path)
+            return 0
+
+        count = 0
+        for item in data:
+            if not isinstance(item, dict):
+                _log.warning("load_from_json_file: skipping non-dict item: %r", item)
+                continue
+            task_type = item.get("type")
+            if not task_type:
+                _log.warning("load_from_json_file: skipping task without 'type': %r", item)
+                continue
+            payload = item.get("payload")
+            self.enqueue(str(task_type), payload if isinstance(payload, dict) else None)
+            count += 1
+
+        return count
+
     def __len__(self) -> int:
         return len(self._queue)
