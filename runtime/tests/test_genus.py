@@ -178,6 +178,52 @@ class TestTaskQueue(unittest.TestCase):
         q = TaskQueue()
         self.assertIsNone(q.peek())
 
+    # ------------------------------------------------------------------
+    # v0.2 load_from_json_file tests
+    # ------------------------------------------------------------------
+
+    def test_load_from_json_file_valid(self):
+        import json as _json
+        tasks = [
+            {"type": "echo", "payload": {"message": "Hallo von extern!"}},
+            {"type": "noop"},
+        ]
+        path = os.path.join(_TMPDIR, "ext_queue_valid.json")
+        with open(path, "w") as fh:
+            _json.dump(tasks, fh)
+        q = TaskQueue()
+        count = q.load_from_json_file(path)
+        self.assertEqual(count, 2)
+        self.assertEqual(q.pending_count(), 2)
+
+    def test_load_from_json_file_missing_file(self):
+        q = TaskQueue()
+        count = q.load_from_json_file(os.path.join(_TMPDIR, "does_not_exist.json"))
+        self.assertEqual(count, 0)
+
+    def test_load_from_json_file_invalid_json(self):
+        path = os.path.join(_TMPDIR, "ext_queue_bad.json")
+        with open(path, "w") as fh:
+            fh.write("this is not valid json {{{")
+        q = TaskQueue()
+        count = q.load_from_json_file(path)
+        self.assertEqual(count, 0)
+
+    def test_load_from_json_file_skips_task_without_type(self):
+        import json as _json
+        tasks = [
+            {"type": "echo", "payload": {}},
+            {"payload": {"orphan": True}},  # no "type" key – must be skipped
+            {"type": "noop"},
+        ]
+        path = os.path.join(_TMPDIR, "ext_queue_partial.json")
+        with open(path, "w") as fh:
+            _json.dump(tasks, fh)
+        q = TaskQueue()
+        count = q.load_from_json_file(path)
+        self.assertEqual(count, 2)
+        self.assertEqual(q.pending_count(), 2)
+
 
 # ---------------------------------------------------------------------------
 # Ledger tests
@@ -264,6 +310,72 @@ class TestEvaluator(unittest.TestCase):
         # Stats should be persisted in memory
         m2 = Memory()
         self.assertEqual(m2.get("tasks_done"), 2)
+
+    # ------------------------------------------------------------------
+    # v0.2 score tests
+    # ------------------------------------------------------------------
+
+    def _make_evaluator(self, done=0, failed=0):
+        """Return a fresh Evaluator with the given done/failed task counts."""
+        _rm("state.json", "task_ledger.json")
+        m = Memory()
+        tl = Ledger(os.path.join(_TMPDIR, "task_ledger.json"))
+        for i in range(done):
+            tl.record({"event": "task_done", "task_id": str(i)})
+        for i in range(failed):
+            tl.record({"event": "task_failed", "task_id": str(done + i)})
+        return Evaluator(tl, m)
+
+    def test_all_five_scores_present(self):
+        ev = self._make_evaluator(done=3, failed=1)
+        stats = ev.evaluate()
+        for key in ("success_score", "efficiency_score", "stability_score",
+                    "resource_score", "learning_score"):
+            self.assertIn(key, stats, f"Missing key: {key}")
+
+    def test_success_score_all_done(self):
+        ev = self._make_evaluator(done=5, failed=0)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["success_score"], 1.0)
+
+    def test_success_score_no_tasks(self):
+        ev = self._make_evaluator(done=0, failed=0)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["success_score"], 0.0)
+
+    def test_stability_score_mixed(self):
+        # 3 done, 1 failed → total=4, stability = 1 - 1/4 = 0.75
+        ev = self._make_evaluator(done=3, failed=1)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["stability_score"], 0.75)
+
+    def test_resource_score_neutral(self):
+        ev = self._make_evaluator(done=2, failed=0)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["resource_score"], 0.5)
+
+    def test_learning_score_grows_with_done(self):
+        ev = self._make_evaluator(done=10, failed=0)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["learning_score"], 1.0)
+
+    def test_learning_score_below_cap(self):
+        ev = self._make_evaluator(done=5, failed=0)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["learning_score"], 0.5)
+
+    def test_efficiency_score_neutral_when_no_duration(self):
+        ev = self._make_evaluator(done=2, failed=0)
+        stats = ev.evaluate()
+        self.assertAlmostEqual(stats["efficiency_score"], 0.5)
+
+    def test_scores_persisted_in_memory(self):
+        ev = self._make_evaluator(done=4, failed=1)
+        ev.evaluate()
+        m2 = Memory()
+        for key in ("success_score", "efficiency_score", "stability_score",
+                    "resource_score", "learning_score"):
+            self.assertIsNotNone(m2.get(key), f"Not persisted: {key}")
 
 
 # ---------------------------------------------------------------------------

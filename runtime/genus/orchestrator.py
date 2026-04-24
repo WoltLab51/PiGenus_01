@@ -1,4 +1,4 @@
-"""Orchestrator for PiGenus v0.1.
+"""Orchestrator for PiGenus v0.2.
 
 Wires up all components (memory, queue, worker, evaluator) and runs the
 main tick-based loop.  On first run a sample task is seeded; on subsequent
@@ -9,10 +9,12 @@ Usage:
     Orchestrator().run()
 """
 
+import os
 import time
 
 from .memory import Memory
 from .queue import TaskQueue
+from . import queue as _queue_module
 from .ledger import task_ledger, agent_ledger
 from .worker import BasicWorker
 from .evaluator import Evaluator
@@ -62,6 +64,26 @@ class Orchestrator:
                 self.memory.get("tasks_failed", 0),
             )
 
+        # Load any externally injected tasks from the data directory.
+        # DATA_DIR is read at call time so the test harness can redirect it.
+        ext_path = os.path.join(_queue_module.DATA_DIR, "external_queue.json")
+        if os.path.exists(ext_path):
+            injected = self.queue.load_from_json_file(ext_path)
+            if injected:
+                logger.info(
+                    "Loaded %d task(s) from external queue file: %s",
+                    injected, ext_path,
+                )
+                # Only rename after a confirmed successful load so the file
+                # can be corrected and retried if it contained invalid JSON.
+                processed_path = ext_path + ".processed"
+                try:
+                    os.replace(ext_path, processed_path)
+                except OSError as exc:
+                    logger.warning(
+                        "Could not rename external queue file: %s", exc
+                    )
+
     def run(self):
         """Run the main tick loop.
 
@@ -69,7 +91,7 @@ class Orchestrator:
         stops when the queue is empty or *max_ticks* is reached.  A final
         evaluation pass is always executed before returning.
         """
-        logger.info("PiGenus v0.1 orchestrator starting.")
+        logger.info("PiGenus v0.2 orchestrator starting.")
         self._bootstrap()
 
         tick = 0
