@@ -23,7 +23,10 @@ class TaskWhitelist:
     """
 
     def __init__(self, allowed=None):
-        self._allowed = frozenset(allowed) if allowed is not None else DEFAULT_WHITELIST
+        if allowed is not None:
+            self._allowed = frozenset(str(x) for x in allowed)
+        else:
+            self._allowed = DEFAULT_WHITELIST
 
     @property
     def allowed(self) -> frozenset:
@@ -75,9 +78,10 @@ def consume_kill_switch(data_dir: str) -> bool:
     """
     try:
         stop_path = os.path.join(data_dir, "STOP")
-        if os.path.exists(stop_path):
-            os.remove(stop_path)
-            return True
+        os.remove(stop_path)
+        return True
+    except FileNotFoundError:
+        return False
     except OSError as exc:
         logger.warning("Safety | could not remove STOP file: %s", exc)
-    return False
+        return False

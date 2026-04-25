@@ -76,12 +76,20 @@ class Orchestrator:
                     "Loaded %d task(s) from external queue file: %s",
                     injected, ext_path,
                 )
-            processed_path = ext_path + ".processed"
+                renamed_path = ext_path + ".processed"
+            else:
+                logger.warning(
+                    "External queue file could not be loaded or contained no valid tasks; "
+                    "preserving for inspection: %s",
+                    ext_path,
+                )
+                renamed_path = ext_path + ".invalid"
             try:
-                os.replace(ext_path, processed_path)
+                os.replace(ext_path, renamed_path)
             except OSError as exc:
                 logger.warning(
-                    "Could not rename external queue file: %s", exc
+                    "Could not rename external queue file from %s to %s: %s",
+                    ext_path, renamed_path, exc,
                 )
 
     def run(self):

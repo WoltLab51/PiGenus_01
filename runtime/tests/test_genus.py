@@ -707,7 +707,6 @@ class TestOrchestratorKillSwitch(unittest.TestCase):
         _rm("STOP")
 
     def test_stop_file_halts_loop_before_processing(self):
-        import genus.queue as _qmod
         # Place STOP file before run
         stop_path = os.path.join(_TMPDIR, "STOP")
         open(stop_path, "w").close()
@@ -788,6 +787,53 @@ class TestQueueWhitelistGuard(unittest.TestCase):
         q = TaskQueue()
         count = q.load_from_json_file(path)
         self.assertEqual(count, 2)
+
+
+class TestExternalQueueRename(unittest.TestCase):
+    """Tests for _bootstrap external queue rename behaviour."""
+
+    def setUp(self):
+        _rm(
+            "state.json", "queue.json", "task_ledger.json",
+            "agent_ledger.json",
+            "external_queue.json",
+            "external_queue.json.processed",
+            "external_queue.json.invalid",
+        )
+
+    def tearDown(self):
+        _rm(
+            "external_queue.json",
+            "external_queue.json.processed",
+            "external_queue.json.invalid",
+        )
+
+    def _write_ext_queue(self, tasks):
+        import json as _json
+        path = os.path.join(_TMPDIR, "external_queue.json")
+        with open(path, "w") as fh:
+            _json.dump(tasks, fh)
+        return path
+
+    def test_all_rejected_renames_to_invalid(self):
+        """A file with only non-whitelisted tasks is renamed to .invalid."""
+        self._write_ext_queue([{"type": "dangerous_op"}, {"type": "evil"}])
+        m = Memory()
+        m.set("bootstrapped", True)
+        Orchestrator(tick_delay=0).run()
+        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json")))
+        self.assertTrue(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.invalid")))
+        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.processed")))
+
+    def test_valid_tasks_renames_to_processed(self):
+        """A file with whitelisted tasks is renamed to .processed."""
+        self._write_ext_queue([{"type": "noop"}])
+        m = Memory()
+        m.set("bootstrapped", True)
+        Orchestrator(tick_delay=0).run()
+        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json")))
+        self.assertTrue(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.processed")))
+        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.invalid")))
 
 
 if __name__ == "__main__":
