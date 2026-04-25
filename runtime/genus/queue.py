@@ -132,7 +132,7 @@ class TaskQueue:
         """
         return sum(1 for t in self._queue if t["status"] in ("pending", "processing"))
 
-    def load_from_json_file(self, path: str) -> int:
+    def load_from_json_file(self, path: str, whitelist=None) -> int:
         """Load tasks from an external JSON file and enqueue them.
 
         The file must contain a JSON array of task dicts.  Each dict must
@@ -142,6 +142,12 @@ class TaskQueue:
         logs a warning) if the file is missing, unreadable, or contains
         invalid JSON.  Individual invalid items, including task dicts that
         lack a ``"type"`` key, are skipped and logged as warnings.
+
+        Parameters
+        ----------
+        whitelist:
+            Optional TaskWhitelist instance.  When provided, task types not in
+            the whitelist are logged and skipped rather than enqueued.
         """
         _log = get_logger()
 
@@ -168,6 +174,12 @@ class TaskQueue:
             task_type = item.get("type")
             if not task_type:
                 _log.warning("load_from_json_file: skipping task without 'type': %r", item)
+                continue
+            # Whitelist guard
+            if whitelist is not None and not whitelist.is_allowed(str(task_type)):
+                _log.warning(
+                    "load_from_json_file: REJECTED type=%r — not in whitelist", task_type
+                )
                 continue
             payload = item.get("payload")
             new_tasks.append({

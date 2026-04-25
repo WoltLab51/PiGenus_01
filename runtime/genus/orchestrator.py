@@ -20,6 +20,7 @@ from .worker import BasicWorker
 from .evaluator import Evaluator
 from .matcher import match
 from .logger import get_logger
+from .safety import TaskWhitelist, check_kill_switch, consume_kill_switch
 
 logger = get_logger()
 
@@ -39,7 +40,7 @@ class Orchestrator:
         Seconds to sleep between ticks (keeps CPU usage low on the Pi).
     """
 
-    def __init__(self, max_ticks: int = DEFAULT_MAX_TICKS, tick_delay: float = 0.1):
+    def __init__(self, max_ticks: int = DEFAULT_MAX_TICKS, tick_delay: float = 0.1, whitelist: TaskWhitelist = None):
         self.memory = Memory()
         self.queue = TaskQueue()
         self.tl = task_ledger()
@@ -48,6 +49,7 @@ class Orchestrator:
         self.evaluator = Evaluator(self.tl, self.memory)
         self.max_ticks = max_ticks
         self.tick_delay = tick_delay
+        self.whitelist = whitelist if whitelist is not None else TaskWhitelist()
 
     def _bootstrap(self):
         """Seed the queue with sample tasks on the very first run."""
@@ -68,21 +70,19 @@ class Orchestrator:
         # DATA_DIR is read at call time so the test harness can redirect it.
         ext_path = os.path.join(_queue_module.DATA_DIR, "external_queue.json")
         if os.path.exists(ext_path):
-            injected = self.queue.load_from_json_file(ext_path)
+            injected = self.queue.load_from_json_file(ext_path, whitelist=self.whitelist)
             if injected:
                 logger.info(
                     "Loaded %d task(s) from external queue file: %s",
                     injected, ext_path,
                 )
-                # Only rename after a confirmed successful load so the file
-                # can be corrected and retried if it contained invalid JSON.
-                processed_path = ext_path + ".processed"
-                try:
-                    os.replace(ext_path, processed_path)
-                except OSError as exc:
-                    logger.warning(
-                        "Could not rename external queue file: %s", exc
-                    )
+            processed_path = ext_path + ".processed"
+            try:
+                os.replace(ext_path, processed_path)
+            except OSError as exc:
+                logger.warning(
+                    "Could not rename external queue file: %s", exc
+                )
 
     def run(self):
         """Run the main tick loop.
@@ -91,17 +91,33 @@ class Orchestrator:
         stops when the queue is empty or *max_ticks* is reached.  A final
         evaluation pass is always executed before returning.
         """
-        logger.info("PiGenus v0.3 orchestrator starting.")
+        logger.info("PiGenus v0.4 orchestrator starting.")
         self._bootstrap()
 
         tick = 0
         while self.max_ticks == 0 or tick < self.max_ticks:
+            # Kill-switch: stop gracefully if STOP file exists.
+            if check_kill_switch(_queue_module.DATA_DIR):
+                logger.warning(
+                    "Safety | STOP file detected — shutting down gracefully."
+                )
+                consume_kill_switch(_queue_module.DATA_DIR)
+                break
+
             tick += 1
             pending = self.queue.pending_count()
             logger.info("Tick %d | queue pending=%d", tick, pending)
 
             next_task = self.queue.peek()
             if next_task:
+                # Whitelist check before dispatching.
+                if not self.whitelist.check(next_task):
+                    # Dequeue and mark failed — do not process.
+                    t = self.queue.dequeue()
+                    if t:
+                        self.queue.mark_failed(t["id"], "rejected by whitelist")
+                    continue
+
                 category, agent_name = match(next_task)
                 logger.info(
                     "Match | task_id=%s type=%s -> category=%s agent=%s",

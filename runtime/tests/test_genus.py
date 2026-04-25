@@ -59,6 +59,7 @@ from genus.orchestrator import Orchestrator
 from genus.problem_matrix import ProblemMatrix
 from genus.agent_matrix import AgentMatrix
 from genus.matcher import match
+from genus.safety import TaskWhitelist, check_kill_switch, consume_kill_switch
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +624,170 @@ class TestMatcher(unittest.TestCase):
         category, agent = match({"type": "classify"})
         self.assertEqual(category, "classification")
         self.assertEqual(agent, "basic_worker")
+
+
+# ---------------------------------------------------------------------------
+# Safety layer tests (v0.4)
+# ---------------------------------------------------------------------------
+
+class TestTaskWhitelist(unittest.TestCase):
+    def test_allowed_types_accepted(self):
+        wl = TaskWhitelist()
+        for t in ("echo", "noop", "classify"):
+            self.assertTrue(wl.is_allowed(t))
+
+    def test_unknown_type_rejected(self):
+        wl = TaskWhitelist()
+        self.assertFalse(wl.is_allowed("dangerous_op"))
+        self.assertFalse(wl.is_allowed(""))
+        self.assertFalse(wl.is_allowed("rm -rf"))
+
+    def test_check_returns_true_for_allowed(self):
+        wl = TaskWhitelist()
+        task = {"id": "abc", "type": "echo"}
+        self.assertTrue(wl.check(task))
+
+    def test_check_returns_false_for_rejected(self):
+        wl = TaskWhitelist()
+        task = {"id": "xyz", "type": "bad_task"}
+        self.assertFalse(wl.check(task))
+
+    def test_check_handles_non_dict_task(self):
+        wl = TaskWhitelist()
+        self.assertFalse(wl.check(None))
+        self.assertFalse(wl.check("not a dict"))
+
+    def test_custom_whitelist(self):
+        wl = TaskWhitelist(["custom_op"])
+        self.assertTrue(wl.is_allowed("custom_op"))
+        self.assertFalse(wl.is_allowed("echo"))
+
+    def test_allowed_property_is_frozenset(self):
+        wl = TaskWhitelist()
+        self.assertIsInstance(wl.allowed, frozenset)
+
+
+class TestKillSwitch(unittest.TestCase):
+    def setUp(self):
+        _rm("STOP")
+
+    def tearDown(self):
+        _rm("STOP")
+
+    def test_no_stop_file_returns_false(self):
+        self.assertFalse(check_kill_switch(_TMPDIR))
+
+    def test_stop_file_returns_true(self):
+        stop_path = os.path.join(_TMPDIR, "STOP")
+        open(stop_path, "w").close()
+        self.assertTrue(check_kill_switch(_TMPDIR))
+
+    def test_consume_removes_stop_file(self):
+        stop_path = os.path.join(_TMPDIR, "STOP")
+        open(stop_path, "w").close()
+        result = consume_kill_switch(_TMPDIR)
+        self.assertTrue(result)
+        self.assertFalse(os.path.exists(stop_path))
+
+    def test_consume_returns_false_when_no_file(self):
+        result = consume_kill_switch(_TMPDIR)
+        self.assertFalse(result)
+
+    def test_consume_safe_on_nonexistent_dir(self):
+        # Should not raise even if data_dir does not exist
+        result = consume_kill_switch("/nonexistent/path/xyz")
+        self.assertFalse(result)
+
+
+class TestOrchestratorKillSwitch(unittest.TestCase):
+    def setUp(self):
+        _rm("state.json", "queue.json", "task_ledger.json", "agent_ledger.json", "STOP")
+
+    def tearDown(self):
+        _rm("STOP")
+
+    def test_stop_file_halts_loop_before_processing(self):
+        import genus.queue as _qmod
+        # Place STOP file before run
+        stop_path = os.path.join(_TMPDIR, "STOP")
+        open(stop_path, "w").close()
+        # Pre-set bootstrapped so seeding is skipped
+        m = Memory()
+        m.set("bootstrapped", True)
+        # Enqueue a task that should NOT be processed
+        q = TaskQueue()
+        q.enqueue("echo", {"message": "should-not-run"})
+        orc = Orchestrator(tick_delay=0)
+        orc.run()
+        # Task must still be pending (not processed)
+        q2 = TaskQueue()
+        self.assertEqual(q2.pending_count(), 1)
+        # STOP file must be removed
+        self.assertFalse(os.path.exists(stop_path))
+
+
+class TestOrchestratorWhitelist(unittest.TestCase):
+    def setUp(self):
+        _rm("state.json", "queue.json", "task_ledger.json", "agent_ledger.json")
+
+    def test_whitelisted_task_is_processed(self):
+        m = Memory()
+        m.set("bootstrapped", True)
+        q = TaskQueue()
+        q.enqueue("echo", {"message": "allowed"})
+        orc = Orchestrator(tick_delay=0)
+        orc.run()
+        m2 = Memory()
+        self.assertEqual(m2.get("tasks_done"), 1)
+        self.assertEqual(m2.get("tasks_failed"), 0)
+
+    def test_non_whitelisted_task_is_rejected(self):
+        m = Memory()
+        m.set("bootstrapped", True)
+        q = TaskQueue()
+        q.enqueue("dangerous_op", {"payload": "bad"})
+        orc = Orchestrator(tick_delay=0)
+        orc.run()
+        # Rejected task is marked failed, not done
+        q2 = TaskQueue()
+        failed = [t for t in q2._queue if t["status"] == "failed"]
+        self.assertEqual(len(failed), 1)
+
+
+class TestQueueWhitelistGuard(unittest.TestCase):
+    def setUp(self):
+        _rm("queue.json")
+
+    def test_load_from_json_file_rejects_non_whitelisted(self):
+        import json as _json
+        tasks = [
+            {"type": "echo", "payload": {}},
+            {"type": "dangerous_op", "payload": {}},
+            {"type": "noop"},
+        ]
+        path = os.path.join(_TMPDIR, "ext_queue_whitelist.json")
+        with open(path, "w") as fh:
+            _json.dump(tasks, fh)
+        wl = TaskWhitelist()
+        q = TaskQueue()
+        count = q.load_from_json_file(path, whitelist=wl)
+        # Only echo and noop should be accepted (dangerous_op rejected)
+        self.assertEqual(count, 2)
+        self.assertEqual(q.pending_count(), 2)
+
+    def test_load_from_json_file_no_whitelist_accepts_all_valid(self):
+        """Without whitelist, original behaviour is preserved."""
+        import json as _json
+        tasks = [
+            {"type": "echo"},
+            {"type": "anything_goes"},
+        ]
+        path = os.path.join(_TMPDIR, "ext_queue_no_wl.json")
+        with open(path, "w") as fh:
+            _json.dump(tasks, fh)
+        q = TaskQueue()
+        count = q.load_from_json_file(path)
+        self.assertEqual(count, 2)
 
 
 if __name__ == "__main__":

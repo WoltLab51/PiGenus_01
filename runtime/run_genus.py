@@ -1,4 +1,4 @@
-"""PiGenus v0.3 – entrypoint.
+"""PiGenus v0.4 – entrypoint.
 
 Run from the runtime/ directory (or any location):
     python run_genus.py
@@ -22,7 +22,7 @@ from genus.orchestrator import Orchestrator
 
 
 def main():
-    print("PiGenus v0.3 starting...")
+    print("PiGenus v0.4 starting...")
     orchestrator = Orchestrator()
     orchestrator.run()
 
