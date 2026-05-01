@@ -9,7 +9,6 @@ Usage:
     Orchestrator().run()
 """
 
-import os
 import time
 
 from .memory import Memory
@@ -21,6 +20,7 @@ from .evaluator import Evaluator
 from .matcher import match
 from .logger import get_logger
 from .safety import TaskWhitelist, check_kill_switch, consume_kill_switch
+from .external_queue import load_external_queue
 
 logger = get_logger()
 
@@ -68,29 +68,7 @@ class Orchestrator:
 
         # Load any externally injected tasks from the data directory.
         # DATA_DIR is read at call time so the test harness can redirect it.
-        ext_path = os.path.join(_queue_module.DATA_DIR, "external_queue.json")
-        if os.path.exists(ext_path):
-            injected = self.queue.load_from_json_file(ext_path, whitelist=self.whitelist)
-            if injected:
-                logger.info(
-                    "Loaded %d task(s) from external queue file: %s",
-                    injected, ext_path,
-                )
-                renamed_path = ext_path + ".processed"
-            else:
-                logger.warning(
-                    "External queue file could not be loaded or contained no valid tasks; "
-                    "preserving for inspection: %s",
-                    ext_path,
-                )
-                renamed_path = ext_path + ".invalid"
-            try:
-                os.replace(ext_path, renamed_path)
-            except OSError as exc:
-                logger.warning(
-                    "Could not rename external queue file from %s to %s: %s",
-                    ext_path, renamed_path, exc,
-                )
+        load_external_queue(_queue_module.DATA_DIR, self.queue, whitelist=self.whitelist)
 
     def run(self):
         """Run the main tick loop.

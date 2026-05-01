@@ -797,15 +797,15 @@ class TestExternalQueueRename(unittest.TestCase):
             "state.json", "queue.json", "task_ledger.json",
             "agent_ledger.json",
             "external_queue.json",
-            "external_queue.json.processed",
-            "external_queue.json.invalid",
+            "external_queue.processed.json",
+            "external_queue.failed.json",
         )
 
     def tearDown(self):
         _rm(
             "external_queue.json",
-            "external_queue.json.processed",
-            "external_queue.json.invalid",
+            "external_queue.processed.json",
+            "external_queue.failed.json",
         )
 
     def _write_ext_queue(self, tasks):
@@ -816,24 +816,24 @@ class TestExternalQueueRename(unittest.TestCase):
         return path
 
     def test_all_rejected_renames_to_invalid(self):
-        """A file with only non-whitelisted tasks is renamed to .invalid."""
+        """A file with only non-whitelisted tasks is renamed to .failed.json."""
         self._write_ext_queue([{"type": "dangerous_op"}, {"type": "evil"}])
         m = Memory()
         m.set("bootstrapped", True)
         Orchestrator(tick_delay=0).run()
         self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json")))
-        self.assertTrue(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.invalid")))
-        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.processed")))
+        self.assertTrue(os.path.exists(os.path.join(_TMPDIR, "external_queue.failed.json")))
+        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.processed.json")))
 
     def test_valid_tasks_renames_to_processed(self):
-        """A file with whitelisted tasks is renamed to .processed."""
+        """A file with whitelisted tasks is renamed to .processed.json."""
         self._write_ext_queue([{"type": "noop"}])
         m = Memory()
         m.set("bootstrapped", True)
         Orchestrator(tick_delay=0).run()
         self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json")))
-        self.assertTrue(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.processed")))
-        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.json.invalid")))
+        self.assertTrue(os.path.exists(os.path.join(_TMPDIR, "external_queue.processed.json")))
+        self.assertFalse(os.path.exists(os.path.join(_TMPDIR, "external_queue.failed.json")))
 
 
 if __name__ == "__main__":
